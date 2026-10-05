@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>فحص PWA — رفيق</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="favicon-32.png">
+<meta name="theme-color" content="#0a4a3b">
+<style>
+body{margin:0;font:16px/1.7 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;background:#f2ecde;color:#1b2420;padding:16px;padding-bottom:40px}
+@media(prefers-color-scheme:dark){body{background:#0a110f;color:#ece5d3}.c{background:#111b18!important;border-color:#21302b!important}}
+h1{font-size:22px;margin:0 0 12px}h2{font-size:17px;margin:0 0 8px}
+.c{background:#fbf7ec;border:1px solid #e0d6bd;border-radius:14px;padding:12px 14px;margin-bottom:12px}
+.r{display:flex;gap:8px;align-items:baseline;padding:2px 0;word-break:break-all}
+.ok::before{content:"✔";color:#1a8a5a}.no::before{content:"✘";color:#c0392b}.wn::before{content:"⚠";color:#b8860b}
+.r::before{flex:0 0 auto;font-weight:700}
+small{opacity:.7}#sum{font-weight:700;font-size:18px}
+button{font:inherit;padding:8px 14px;border-radius:10px;border:0;background:#0f5a48;color:#fff;margin-top:6px}
+</style></head><body>
+<h1>فحص تطبيق رفيق (PWA)</h1>
+<div class="c"><div id="sum">جارٍ الفحص…</div><button onclick="location.reload()">إعادة الفحص</button></div>
+<div class="c"><h2>1) وجود الملفات</h2><div id="files"></div></div>
+<div class="c"><h2>2) Service Worker</h2><div id="sw"></div></div>
+<div class="c"><h2>3) ملف manifest</h2><div id="mf"></div></div>
+<div class="c"><h2>4) العمل دون إنترنت (التخزين المسبق)</h2><div id="ch"></div></div>
+<div class="c"><h2>5) التخزين والنسخ الاحتياطي</h2><div id="st"></div></div>
+<script>
+'use strict';
+var FILES=['index.html','manifest.webmanifest','sw.js','storage.js','check.html','icon-192.png','icon-512.png','maskable-192.png','maskable-512.png','apple-touch-icon.png','favicon-32.png'];
+var PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+var pass=0,fail=0,warn=0;
+function row(id,t,k,note){var d=document.createElement('div');d.className='r '+k;d.innerHTML='<span>'+t+(note?' <small>'+note+'</small>':'')+'</span>';document.getElementById(id).appendChild(d);if(k==='ok')pass++;else if(k==='no')fail++;else warn++}
+function img(src){return new Promise(function(ok){var i=new Image();i.onload=function(){ok([i.naturalWidth,i.naturalHeight])};i.onerror=function(){ok(null)};i.src=src})}
+(async function(){
+ // 1) files
+ for(var f of FILES){try{var r=await fetch(f,{cache:'no-store'});if(r.ok){var b=await r.clone().blob();row('files',f,'ok',(b.size/1024).toFixed(1)+' KB')}else row('files',f,'no','HTTP '+r.status)}catch(e){row('files',f,'no','تعذّر الجلب')}}
+ // 2) service worker
+ if(!('serviceWorker' in navigator))row('sw','المتصفح لا يدعم Service Worker','no');
+ else{
+  if(!(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1'))row('sw','الصفحة ليست على HTTPS','no');
+  else row('sw','السياق آمن (HTTPS)','ok');
+  var reg=await navigator.serviceWorker.getRegistration();
+  if(!reg)row('sw','لا يوجد تسجيل — افتح التطبيق (index.html) مرة واحدة ثم أعد الفحص','no');
+  else{
+   var w=reg.active||reg.waiting||reg.installing;
+   row('sw','تم تسجيل Service Worker','ok',reg.scope);
+   row('sw','الحالة: '+(w?w.state:'—'),w&&w.state==='activated'?'ok':'wn');
+   row('sw','sw.js هو السكربت المسجَّل',w&&/\/sw\.js$/.test(w.scriptURL)?'ok':'no');
+   row('sw',navigator.serviceWorker.controller?'هذه الصفحة تحت سيطرة الـ SW':'هذه الصفحة غير خاضعة بعد (أعد التحميل مرة)',navigator.serviceWorker.controller?'ok':'wn');
+   try{var s=await (await fetch('sw.js',{cache:'no-store'})).text();var m=s.split('\n')[0].match(/VERSION\s*=\s*'([^']+)'/);row('sw','رقم النسخة في السطر الأول: '+(m?m[1]:'غير موجود'),m?'ok':'no');row('sw','يحتوي معالج fetch',/addEventListener\(\s*['"]fetch['"]/.test(s)?'ok':'no')}catch(e){}
+  }
+ }
+ // 3) manifest
+ try{
+  var mr=await fetch('manifest.webmanifest',{cache:'no-store'});var m=await mr.json();row('mf','JSON صالح','ok');
+  ['name','short_name','start_url','scope','display','lang','dir','theme_color','background_color'].forEach(function(k){row('mf',k+' = '+(m[k]||'—'),m[k]?'ok':'no')});
+  row('mf','display = standalone',m.display==='standalone'?'ok':'no');
+  row('mf','start_url = ./index.html',m.start_url==='./index.html'?'ok':'no');
+  row('mf','scope = ./',m.scope==='./'?'ok':'no');
+  row('mf','lang=ar و dir=rtl',m.lang==='ar'&&m.dir==='rtl'?'ok':'no');
+  var ic=m.icons||[];row('mf','عدد الأيقونات: '+ic.length,ic.length>=4?'ok':'no');
+  var haveA={},haveM={};
+  for(var i of ic){
+   var flat=i.src.indexOf('/')<0;var d=await img(i.src);var want=(i.sizes||'').split('x').map(Number);
+   var okk=d&&d[0]===want[0]&&d[1]===want[1];
+   row('mf',i.src+' ('+i.purpose+', '+i.sizes+')',okk&&flat?'ok':'no',d?d.join('×'):'لم تُحمَّل');
+   if(okk){(i.purpose==='maskable'?haveM:haveA)[want[0]]=1}
+  }
+  row('mf','أيقونة any بحجم 192 و512',haveA[192]&&haveA[512]?'ok':'no');
+  row('mf','أيقونة maskable بحجم 192 و512',haveM[192]&&haveM[512]?'ok':'no');
+  var link=document.querySelector('link[rel=manifest]');row('mf','رابط manifest موجود في الصفحة',link?'ok':'no');
+ }catch(e){row('mf','تعذّرت قراءة manifest: '+e.message,'no')}
+ // 4) caches
+ try{
+  var keys=await caches.keys();var mine=keys.filter(function(k){return k.indexOf('rafiq-')===0});
+  if(!mine.length)row('ch','لا يوجد تخزين مسبق بعد','no');
+  else{
+   var c=await caches.open(mine[mine.length-1]);var reqs=await c.keys();var urls=reqs.map(function(q){return q.url});
+   row('ch','اسم التخزين: '+mine[mine.length-1]+' ('+urls.length+' عنصر)','ok');
+   FILES.filter(function(f){return f!=='sw.js'}).concat(['./']).forEach(function(f){var h=urls.some(function(u){return f==='./'?/\/$/.test(u):u.slice(-f.length)===f});row('ch',f==='./'?'./ (الجذر)':f,h?'ok':'no')});
+   row('ch','قارئ PDF (pdf.min.js)',urls.indexOf(PDFJS+'pdf.min.js')>=0?'ok':'wn',urls.indexOf(PDFJS+'pdf.min.js')>=0?'':'لم يُخزَّن بعد — يُخزَّن عند أول تثبيت مع إنترنت');
+   row('ch','قارئ PDF (pdf.worker.min.js)',urls.indexOf(PDFJS+'pdf.worker.min.js')>=0?'ok':'wn');
+   row('ch','خط IBM Plex Sans Arabic',urls.some(function(u){return u.indexOf('fonts.googleapis.com')>=0})?'ok':'wn','إن لم يُخزَّن يُستخدم خط النظام دون إنترنت');
+  }
+ }catch(e){row('ch','تعذّر فحص التخزين: '+e.message,'no')}
+ // 5) storage
+ try{
+  row('st',navigator.onLine?'الاتصال: متصل':'الاتصال: غير متصل','ok');
+  row('st',matchMedia('(display-mode: standalone)').matches?'يعمل كتطبيق مثبَّت':'يعمل في المتصفح (غير مثبَّت)','ok');
+  if(navigator.storage&&navigator.storage.persisted){var p=await navigator.storage.persisted();row('st','تخزين دائم: '+(p?'مفعّل':'غير مفعّل بعد'),p?'ok':'wn','المتصفح يمنحه غالبًا بعد التثبيت أو كثرة الاستخدام')}
+  if(navigator.storage&&navigator.storage.estimate){var e=await navigator.storage.estimate();row('st','المساحة المستخدمة: '+((e.usage||0)/1048576).toFixed(1)+' MB من '+((e.quota||0)/1048576).toFixed(0)+' MB','ok')}
+  var snap=await new Promise(function(ok){var q=indexedDB.open('rafiq-ls',1);q.onupgradeneeded=function(){q.result.createObjectStore('kv')};q.onsuccess=function(){var t=q.result.transaction('kv','readonly').objectStore('kv').get('snapshot');t.onsuccess=function(){q.result.close();ok(t.result)};t.onerror=function(){ok(null)}};q.onerror=function(){ok(null)}});
+  if(snap&&snap.data&&snap.data.mc!=null)row('st','نسخة localStorage الاحتياطية موجودة في IndexedDB','ok',new Date(snap.ts).toLocaleString('ar'));
+  else row('st','لا توجد نسخة احتياطية بعد (تُنشأ بعد أول استخدام للتطبيق)','wn');
+ }catch(e){row('st','تعذّر فحص التخزين: '+e.message,'no')}
+ document.getElementById('sum').textContent=(fail?'❌ ':'✅ ')+'نجح '+pass+' · فشل '+fail+' · تنبيه '+warn;
+})();
+</script></body></html>
